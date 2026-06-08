@@ -1,0 +1,43 @@
+# ── Binaries / build output ──────────────────────────────
+/bin/
+/dist/
+/autodeploy-desktop
+/autodeploy-desktop.exe
+*.exe
+WebView2Loader.dll
+
+# Bundled portable runtime (downloaded by fetch-runtime.ps1, never committed)
+/pwsh/
+/runtime/
+
+# ── Go ───────────────────────────────────────────────────
+*.test
+*.out
+coverage.txt
+vendor/
+
+# ── Local data (created at first launch: iso/output/license/conf/work) ──
+/data/
+data/
+
+# ── Confidential / secrets (NEVER commit) ────────────────
+# Sample configs contain passwords, MFA secrets and recovery tokens
+/samples/
+.env
+*.lic              # Veeam license files
+*.iso              # source / output ISOs
+
+# ── Internal planning / scratch documents (never commit) ──
+plan-*.md
+implementation_plan.md
+task.md
+
+# ── IDE / OS ─────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ── Logs ─────────────────────────────────────────────────
+*.log

@@ -1,0 +1,91 @@
+{{define "layout.html"}}<!doctype html>
+<html lang="{{.Lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>autodeploy-web · {{.Version}}{{if .Commit}}+{{.Commit}}{{end}}</title>
+<link rel="stylesheet" href="/static/tailwind.css">
+<script src="/static/tailwind.js"></script>
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+<script src="/static/alpine.min.js" defer></script>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+<header class="bg-emerald-700 text-white sticky top-0 z-50 shadow-md">
+  <div class="container mx-auto px-4 py-3.5 flex items-center justify-between gap-4">
+    <a href="/" class="text-lg font-bold whitespace-nowrap">🚀 autodeploy-web</a>
+    <div class="flex items-center gap-5 flex-wrap justify-end">
+      <nav class="flex items-center gap-1 text-sm flex-wrap">
+        <a href="/wizard"
+           class="flex items-center gap-1 px-2 py-1 rounded transition-colors hover:bg-emerald-600 {{if eq .NavSection "wizard"}}bg-emerald-800 font-semibold{{end}}">
+          {{t "nav.wizard"}}
+        </a>
+        <a href="/"
+           class="flex items-center gap-1 px-2 py-1 rounded transition-colors hover:bg-emerald-600 {{if eq .NavSection "newjob"}}bg-emerald-800 font-semibold{{end}}">
+          ✨ {{t "nav.new_job"}}
+        </a>
+        <a href="/media/workspace"
+           class="flex items-center gap-1 px-2 py-1 rounded transition-colors hover:bg-emerald-600 {{if eq .NavSection "workspace"}}bg-emerald-800 font-semibold{{end}}">
+          📁 {{t "nav.workspace"}}
+        </a>
+        <a href="/media/output"
+           class="flex items-center gap-1 px-2 py-1 rounded transition-colors hover:bg-emerald-600 {{if eq .NavSection "output"}}bg-emerald-800 font-semibold{{end}}">
+          📦 {{t "nav.output"}}
+        </a>
+        <a href="/media/license"
+           class="flex items-center gap-1 px-2 py-1 rounded transition-colors hover:bg-emerald-600 {{if eq .NavSection "license"}}bg-emerald-800 font-semibold{{end}}">
+          🔑 {{t "nav.licenses"}}
+        </a>
+        <a href="/jobs"
+           class="flex items-center gap-1 px-2 py-1 rounded transition-colors hover:bg-emerald-600 {{if eq .NavSection "jobs"}}bg-emerald-800 font-semibold{{end}}">
+          📋 {{t "nav.jobs"}}
+        </a>
+        <a href="/admin"
+           class="flex items-center gap-1 px-2 py-1 rounded transition-colors hover:bg-emerald-600 {{if eq .NavSection "admin"}}bg-emerald-800 font-semibold{{end}}"
+           title="{{t "nav.settings"}}">
+          ⚙️ <span class="hidden sm:inline">{{t "nav.settings"}}</span>
+        </a>
+        <a href="https://github.com/BaptisteTellier/autodeploy-desktop" target="_blank"
+           class="flex items-center gap-1 px-2 py-1 rounded transition-colors hover:bg-emerald-600 opacity-75 hover:opacity-100">
+          GitHub
+        </a>
+      </nav>
+
+      <!-- Language switcher (FR / EN flags) -->
+      <div class="flex items-center gap-1.5">
+        <a href="/lang/en" title="English" aria-label="Switch to English"
+           class="block w-7 h-5 rounded-sm overflow-hidden border border-white/30 ring-offset-2 ring-offset-emerald-700 transition {{if eq .Lang "en"}}ring-2 ring-white{{else}}opacity-60 hover:opacity-100{{end}}">
+          <svg viewBox="0 0 60 30" class="w-full h-full block" preserveAspectRatio="none" aria-hidden="true">
+            <clipPath id="uk-cross"><path d="M30,15 h30 v15 z v15 h-30 z h-30 v-15 z v-15 h30 z"/></clipPath>
+            <path d="M0,0 v30 h60 v-30 z" fill="#012169"/>
+            <path d="M0,0 L60,30 M60,0 L0,30" stroke="#fff" stroke-width="6"/>
+            <path d="M0,0 L60,30 M60,0 L0,30" clip-path="url(#uk-cross)" stroke="#C8102E" stroke-width="4"/>
+            <path d="M30,0 v30 M0,15 h60" stroke="#fff" stroke-width="10"/>
+            <path d="M30,0 v30 M0,15 h60" stroke="#C8102E" stroke-width="6"/>
+          </svg>
+        </a>
+        <a href="/lang/fr" title="Français" aria-label="Passer en français"
+           class="block w-7 h-5 rounded-sm overflow-hidden border border-white/30 ring-offset-2 ring-offset-emerald-700 transition {{if eq .Lang "fr"}}ring-2 ring-white{{else}}opacity-60 hover:opacity-100{{end}}">
+          <svg viewBox="0 0 3 2" class="w-full h-full block" preserveAspectRatio="none" aria-hidden="true">
+            <rect width="3" height="2" fill="#fff"/>
+            <rect width="1" height="2" x="0" fill="#0055A4"/>
+            <rect width="1" height="2" x="2" fill="#EF4135"/>
+          </svg>
+        </a>
+      </div>
+
+      <span class="text-xs opacity-75 font-mono whitespace-nowrap"
+            title="version {{.Version}}{{if .Commit}} · commit {{.Commit}}{{end}}{{if .BuildDate}} · built {{.BuildDate}}{{end}}">
+        v{{.Version}}{{if .Commit}} · <span class="opacity-90">{{.Commit}}</span>{{end}}
+      </span>
+    </div>
+  </div>
+</header>
+<main class="container mx-auto px-4 py-6">
+{{template "content" .}}
+</main>
+<footer class="text-center text-xs text-slate-500 py-6">
+{{t "footer.pre"}}<a href="https://github.com/BaptisteTellier/autodeploy" class="underline">BaptisteTellier/autodeploy</a>{{t "footer.post"}}
+</footer>
+</body>
+</html>{{end}}
