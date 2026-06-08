@@ -32,6 +32,9 @@ plan-*.md
 implementation_plan.md
 task.md
 
+# ── Claude Code (agent worktrees / local state) ──────────
+.claude/
+
 # ── IDE / OS ─────────────────────────────────────────────
 .idea/
 .vscode/

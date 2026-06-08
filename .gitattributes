@@ -1,0 +1,18 @@
+# Normalise line endings: LF in the repo AND in the working tree on every
+# platform. This keeps `gofmt -l` deterministic on the Windows CI runner
+# (GitHub Actions sets core.autocrlf=true, which would otherwise rewrite
+# Go sources to CRLF and make gofmt report them as unformatted).
+* text=auto eol=lf
+
+# Explicit for clarity / safety.
+*.go   text eol=lf
+*.mod  text eol=lf
+*.sum  text eol=lf
+*.ps1  text eol=lf
+*.sh   text eol=lf
+*.py   text eol=lf
+*.yml  text eol=lf
+*.html text eol=lf
+*.js   text eol=lf
+*.css  text eol=lf
+*.md   text eol=lf
