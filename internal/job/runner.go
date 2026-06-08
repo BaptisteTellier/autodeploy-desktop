@@ -26,9 +26,10 @@ type Runner struct {
 	LicenseDir string // /data/license
 	ConfDir    string // /data/conf
 	JobID      string // per-job output subfolder: OutputDir/JobID/
-	// SourceISO is either:
-	//   • a bare filename relative to IsoDir (legacy), OR
-	//   • an absolute path to the ISO on disk (P5: no copy, cwd = ISO dir).
+	// SourceISO is the absolute path to the source ISO as stored in the PS1
+	// config. The PS1 performs the Copy-Item itself using this path, so the
+	// runner never needs to stage the ISO. (Manager.Submit ensures this is
+	// always absolute before writing the config JSON.)
 	SourceISO string
 	WorkDir   string // base dir for per-job staging dirs, e.g. /data/work
 
@@ -67,54 +68,35 @@ func (r *Runner) Run(ctx context.Context) (int, error) {
 		return -1, fmt.Errorf("config file missing: %w", err)
 	}
 
-	// --- Determine ISO source strategy (P5) -----------------------------------
-	// If SourceISO is an absolute path to an existing file we set cwd to its
-	// directory and pass only the basename — avoiding a 15-20 GB copy.
-	// Otherwise we fall back to the legacy IsoDir strategy.
-	isoAbsolute := false
-	if r.SourceISO != "" && filepath.IsAbs(r.SourceISO) {
-		if _, statErr := os.Stat(r.SourceISO); statErr == nil {
-			isoAbsolute = true
-		}
-	}
-
-	// Per-job staging directory under /data/work/<jobID> — same filesystem as
-	// /data/output so that moving large ISOs is an instant rename, not a copy.
+	// Per-job staging directory under WorkDir/<jobID>.
+	// cwd is always stageDir: the config carries an absolute SourceISO so the
+	// PS1 finds the source regardless of cwd, and the PS1 writes the output ISO
+	// (bare filename from OutputISO) into cwd — i.e. stageDir — where
+	// collectOutputs will pick it up.
 	stageDir := filepath.Join(r.WorkDir, r.JobID)
 	if err := os.MkdirAll(stageDir, 0o755); err != nil {
 		return -1, fmt.Errorf("create staging dir: %w", err)
 	}
 	defer os.RemoveAll(stageDir)
 
-	// cwd for pwsh: ISO directory when using an absolute path, else stageDir.
-	runDir := stageDir
-	if isoAbsolute {
-		runDir = filepath.Dir(r.SourceISO)
-		r.OnLine(fmt.Sprintf("[info] absolute ISO source — cwd set to %s", runDir))
-	}
+	// We do NOT copy or symlink the source ISO: the PS1 config already contains
+	// the absolute path to the ISO and the PS1 copies it itself (Copy-Item).
 
-	if !isoAbsolute {
-		// Symlink the source ISO into the staging dir so the PS1 finds it by bare name.
-		// Base the name so a crafted SourceISO can't point the symlink outside IsoDir.
-		if r.SourceISO != "" {
-			iso := filepath.Base(r.SourceISO)
-			src := filepath.Join(r.IsoDir, iso)
-			dst := filepath.Join(stageDir, iso)
-			if err := os.Symlink(src, dst); err != nil {
-				r.OnLine(fmt.Sprintf("[warn] symlink source ISO: %v", err))
-			}
-		}
-	}
-
-	// Symlink companion folders the PS1 may consult.
-	for _, m := range []struct{ Name, Source string }{
+	// Make companion directories (license, conf) reachable from stageDir under
+	// their bare names, as the PS1 references them by name relative to cwd via
+	// Add-FolderToISO. We avoid os.Symlink (requires admin or Developer Mode on
+	// Windows) and use a directory junction instead, with a recursive-copy fallback.
+	for _, entry := range []struct{ Name, Source string }{
 		{"license", r.LicenseDir},
 		{"conf", r.ConfDir},
 	} {
-		if m.Source == "" {
+		if entry.Source == "" {
 			continue
 		}
-		_ = os.Symlink(m.Source, filepath.Join(stageDir, m.Name))
+		dst := filepath.Join(stageDir, entry.Name)
+		if err := linkOrCopyDir(entry.Source, dst); err != nil {
+			r.OnLine(fmt.Sprintf("[warn] stage %s dir: %v", entry.Name, err))
+		}
 	}
 
 	// Stage the PS1 into cwd so the PS1 can reference files with bare names.
@@ -141,9 +123,8 @@ func (r *Runner) Run(ctx context.Context) (int, error) {
 		psExe = "pwsh"
 	}
 
-	// When using absolute ISO, output is still collected from stageDir (the PS1
-	// writes outputs relative to its -ConfigFile; outputs land in stageDir via
-	// the staged config, then collectOutputs moves them to OutputDir/JobID).
+	// The PS1 writes all outputs (customized ISO, grub.cfg, vbr-ks.cfg, logs)
+	// into its cwd. cwd is stageDir, so collectOutputs finds them all there.
 	args := []string{
 		"-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
 		"-File", stagedScript,
@@ -151,7 +132,7 @@ func (r *Runner) Run(ctx context.Context) (int, error) {
 	}
 
 	cmd := exec.CommandContext(ctx, psExe, args...)
-	cmd.Dir = runDir
+	cmd.Dir = stageDir
 
 	// Build child environment: prepend augmented PATH and disable telemetry.
 	env := os.Environ()
@@ -183,7 +164,7 @@ func (r *Runner) Run(ctx context.Context) (int, error) {
 	}
 
 	r.OnLine(fmt.Sprintf("[%s] $ %s %s", time.Now().Format(time.RFC3339), psExe, strings.Join(args, " ")))
-	r.OnLine(fmt.Sprintf("[%s] cwd: %s", time.Now().Format(time.RFC3339), runDir))
+	r.OnLine(fmt.Sprintf("[%s] cwd: %s", time.Now().Format(time.RFC3339), stageDir))
 
 	if err := cmd.Start(); err != nil {
 		return -1, err
@@ -262,6 +243,65 @@ func (r *Runner) consume(p io.Reader) {
 	for scanner.Scan() {
 		r.OnLine(scrub(scanner.Text()))
 	}
+}
+
+// linkOrCopyDir makes src reachable at dst without using os.Symlink.
+// On Windows, os.Symlink requires Administrator privileges or Developer Mode;
+// a directory junction (mklink /J) works for any user on NTFS.
+// The function tries a junction first; if mklink fails (e.g. non-NTFS, old
+// Windows, or permission issue) it falls back to a recursive copy.
+// A no-op is performed when src does not exist or is empty.
+func linkOrCopyDir(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // source absent — nothing to do
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", src)
+	}
+
+	// Skip staging an empty source directory — Add-FolderToISO checks
+	// Test-Path and returns early when the folder is absent, so an empty
+	// directory and a missing one are equivalent from the PS1's perspective.
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// Try a Windows directory junction first (no admin required).
+	out, jErr := exec.Command("cmd", "/c", "mklink", "/J", dst, src).CombinedOutput()
+	if jErr == nil {
+		return nil
+	}
+	// Junction failed — log and fall back to a recursive copy.
+	_ = out // ignore verbose mklink output; errors are checked via jErr
+
+	return copyDirRecursive(src, dst)
+}
+
+// copyDirRecursive recursively copies all files from src into dst, creating
+// dst and any sub-directories as needed.
+func copyDirRecursive(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, relErr := filepath.Rel(src, path)
+		if relErr != nil {
+			return relErr
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		return copyFile(path, target)
+	})
 }
 
 func copyFile(src, dst string) error {

@@ -1,5 +1,8 @@
 //go:build windows
 
+// This binary is intentionally Windows-only: it uses WebView2, explorer.exe dialogs,
+// and Windows registry APIs that have no cross-platform equivalent.
+
 package main
 
 import (
@@ -17,6 +20,7 @@ import (
 	"time"
 
 	webview "github.com/jchv/go-webview2"
+	"golang.org/x/sys/windows/registry"
 
 	"github.com/BaptisteTellier/autodeploy-desktop/internal/config"
 	"github.com/BaptisteTellier/autodeploy-desktop/internal/job"
@@ -124,14 +128,15 @@ func main() {
 	}()
 
 	// --- 6. WebView2 window (with browser fallback) --------------------------
-	wv := tryWebView2(baseURL+"/", quit)
-	if wv != nil {
-		// WebView2 available — run the event loop (blocks until window closes).
-		wv.Run()
-		wv.Destroy()
-	} else {
-		// Fallback: open default browser, then wait for /quit or OS signal.
-		log.Println("WebView2 runtime not available — opening default browser")
+	// First do an explicit registry probe so we never attempt to load WebView2
+	// when the Evergreen runtime is simply absent (avoids hard crashes in Run).
+	if !webView2RuntimePresent() {
+		log.Println("WebView2 Evergreen runtime not found — opening default browser")
+		openBrowser(baseURL + "/")
+		<-quit
+	} else if !tryWebView2(baseURL+"/", quit) {
+		// Runtime present but window creation / Run() failed unexpectedly.
+		log.Println("WebView2 window failed — falling back to default browser")
 		openBrowser(baseURL + "/")
 		<-quit
 	}
@@ -145,13 +150,46 @@ func main() {
 	log.Println("bye")
 }
 
-// tryWebView2 attempts to create a WebView2 window. Returns nil if the runtime
-// is absent (panics from go-webview2 are recovered).
-func tryWebView2(url string, quit chan struct{}) (wv webview.WebView) {
+// webView2RuntimePresent checks the Windows registry for the WebView2 Evergreen
+// runtime. It tries three well-known keys in order and returns true when it finds
+// a non-empty "pv" value that is not "0.0.0.0".
+func webView2RuntimePresent() bool {
+	const guid = `{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`
+	candidates := []struct {
+		root registry.Key
+		path string
+	}{
+		{registry.LOCAL_MACHINE, `SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\` + guid},
+		{registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\EdgeUpdate\Clients\` + guid},
+		{registry.CURRENT_USER, `SOFTWARE\Microsoft\EdgeUpdate\Clients\` + guid},
+	}
+	for _, c := range candidates {
+		k, err := registry.OpenKey(c.root, c.path, registry.QUERY_VALUE)
+		if err != nil {
+			continue
+		}
+		pv, _, err := k.GetStringValue("pv")
+		k.Close()
+		if err != nil {
+			continue
+		}
+		if pv != "" && pv != "0.0.0.0" {
+			log.Printf("WebView2 Evergreen runtime found (pv=%s)", pv)
+			return true
+		}
+	}
+	return false
+}
+
+// tryWebView2 creates the WebView2 window, runs the event loop, and destroys it.
+// Returns true when everything completed normally, false on any failure (including
+// a panic in NewWithOptions or Run). The caller should open the browser fallback
+// when false is returned.
+func tryWebView2(url string, quit chan struct{}) (ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("WebView2 unavailable: %v", r)
-			wv = nil
+			log.Printf("WebView2 window error: %v", r)
+			ok = false
 		}
 	}()
 	w := webview.NewWithOptions(webview.WebViewOptions{
@@ -159,8 +197,11 @@ func tryWebView2(url string, quit chan struct{}) (wv webview.WebView) {
 		Window: nil,
 	})
 	if w == nil {
-		return nil
+		log.Println("WebView2 NewWithOptions returned nil")
+		return false
 	}
+	defer w.Destroy()
+
 	w.SetTitle("autodeploy-desktop")
 	w.SetSize(1280, 800, webview.HintNone)
 	w.Navigate(url)
@@ -171,7 +212,11 @@ func tryWebView2(url string, quit chan struct{}) (wv webview.WebView) {
 		return ""
 	})
 	w.Init(`window.addEventListener('beforeunload', function(){ try{ __desktopQuit(); }catch(_){} });`)
-	return w
+
+	// Run blocks until the window is closed. Any panic here is caught by the
+	// deferred recover above, which sets ok=false so the caller can fall back.
+	w.Run()
+	return true
 }
 
 // openBrowser opens url in the default Windows browser.

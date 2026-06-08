@@ -68,22 +68,36 @@ func (m *Manager) Submit(c config.Config) (*Job, error) {
 	}
 	cfgPath := filepath.Join(jobsConfigDir, id+".json")
 
-	// Compute output ISO name (same logic as PS1: append _customized if empty).
-	out := c.OutputISO
-	if out == "" {
-		base := c.SourceISO
+	// Compute bare output ISO name (no directory component).
+	// The PS1 always writes OutputISO into its cwd (stageDir), so we must
+	// store only a bare filename here — not an absolute path. The runner sets
+	// cwd=stageDir and collectOutputs scans stageDir, so the file lands in the
+	// right place automatically.
+	outBase := filepath.Base(c.OutputISO)
+	if outBase == "" || outBase == "." {
+		// Derive <name>_customized<ext> from the bare source filename.
+		base := filepath.Base(c.SourceISO)
 		ext := filepath.Ext(base)
-		out = base[:len(base)-len(ext)] + "_customized" + ext
+		outBase = base[:len(base)-len(ext)] + "_customized" + ext
 	}
 
-	// Override SourceISO/OutputISO paths to point to the container volumes,
-	// then write the config the PS1 will consume.
+	// Build the PS1-consumed config override.
+	// SourceISO must be an absolute path so the PS1 can locate the file
+	// regardless of where cwd is. OutputISO must be a bare filename so the PS1
+	// writes the result into cwd (stageDir), where collectOutputs picks it up.
 	override := c
-	// SourceISO and OutputISO in the PS1 are bare filenames (no path) —
-	// the PS1 cd's into the ISO directory. We keep the bare filename in the
-	// JSON; the runner cd's into /data/iso, output lands there, we move it
-	// to /data/output post-run.
-	override.OutputISO = out
+
+	// Resolve SourceISO to an absolute path.
+	if filepath.IsAbs(c.SourceISO) {
+		// Desktop picker already returned an absolute path — use as-is.
+		override.SourceISO = c.SourceISO
+	} else {
+		// Legacy bare-filename (file lives in DataDir/iso/).
+		override.SourceISO = filepath.Join(m.opts.DataDir, "iso", filepath.Base(c.SourceISO))
+	}
+
+	// Store only the bare output filename; no directory component.
+	override.OutputISO = outBase
 
 	b, err := json.MarshalIndent(override, "", "  ")
 	if err != nil {
@@ -93,7 +107,7 @@ func (m *Manager) Submit(c config.Config) (*Job, error) {
 		return nil, err
 	}
 
-	j := newJob(id, c.Hostname, c.ApplianceType, c.SourceISO, out, cfgPath)
+	j := newJob(id, c.Hostname, c.ApplianceType, c.SourceISO, outBase, cfgPath)
 
 	m.mu.Lock()
 	m.jobs[id] = j

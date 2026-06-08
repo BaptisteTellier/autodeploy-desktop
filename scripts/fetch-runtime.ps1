@@ -43,10 +43,14 @@ Set-StrictMode -Version Latest
 
 # ── Pinned versions ──────────────────────────────────────────────────────────
 # PowerShell 7.4.10 — win-x64 official release.
-# To upgrade: change $PWSH_VERSION and update $PWSH_SHA256 from the release page:
+# To upgrade: change $PWSH_VERSION AND update $PWSH_SHA256 from the GitHub release page
+# "SHA256 Hashes of the release artifacts" table:
 #   https://github.com/PowerShell/PowerShell/releases/tag/v7.4.10
+# NEVER fabricate or reuse a hash from a different version — CI will fail at Verify-SHA256.
 $PWSH_VERSION = '7.4.10'
-$PWSH_SHA256  = 'E91EB7F4AF5B16D1027DC0FCF3DBEF7E34CF47F1AC25B5D8B99DBE55C27E7CEF'
+# Verified SHA-256 for PowerShell-7.4.10-win-x64.zip from the official release page above.
+# Bumping $PWSH_VERSION REQUIRES updating this hash from the new release's hash table.
+$PWSH_SHA256  = 'CF580A79A2210A51AC1F3B2871A95BE4D63AC302CFFC41746AFB8D1E1E31A80F'
 
 $PWSH_URL = "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/PowerShell-${PWSH_VERSION}-win-x64.zip"
 
@@ -137,8 +141,25 @@ $runtimeMarker = Join-Path $RuntimeDir '.version'
 # reproducibility, pin specific package versions from the MSYS2 package archive.
 $runtimeMarkerExpected = 'msys2-xorriso-rsync'
 
+# Core binaries that MUST be present for the runtime to be usable.
+$CoreBinaries = @('xorriso.exe', 'rsync.exe', 'bash.exe', 'msys-2.0.dll')
+
+# Self-healing idempotency: if the version marker matches BUT any core binary is
+# missing, ignore the marker and rebuild from scratch.
+$runtimeValid = $false
 if ((Test-Path $runtimeMarker) -and ((Get-Content $runtimeMarker -Raw).Trim() -eq $runtimeMarkerExpected)) {
-    Write-Done "runtime/ already populated — skipping MSYS2 install step."
+    $runtimeValid = $true
+    foreach ($bin in $CoreBinaries) {
+        if (-not (Test-Path (Join-Path $RuntimeDir "usr\bin\$bin"))) {
+            Write-Host "  [WARN] Core binary missing from existing runtime/: $bin — rebuilding." -ForegroundColor Yellow
+            $runtimeValid = $false
+            break
+        }
+    }
+}
+
+if ($runtimeValid) {
+    Write-Done "runtime/ already populated and all core binaries present — skipping MSYS2 install step."
 }
 else {
     if (-not (Test-Path $Msys2Root)) {
@@ -161,91 +182,164 @@ The runtime/ directory is gitignored and must be rebuilt per the plan §3b.
                  -Description 'pacman -S xorriso rsync'
 
     # ── DLL dependency closure ─────────────────────────────────────────────
-    # We use ntldd (Windows-aware ldd) from the MSYS2 package ntldd-git, or fall
-    # back to ldd (MSYS2 ldd only shows MSYS DLLs).  The closure script below:
-    #   1. Runs ldd on each target binary.
-    #   2. Recursively resolves each found DLL.
-    #   3. Copies every file under MSYS2_ROOT/usr/bin into the staging area.
-    #
-    # Note: ntldd shows system DLLs (kernel32, ucrtbase, etc.) which we EXCLUDE
-    # because they are always present on Windows. We only bundle MSYS-specific DLLs
-    # (files that live under $MSYS2_ROOT).
-    Write-Step "Installing ntldd for dependency closure ..."
-    & $Msys2Bash --login -c 'pacman -S --noconfirm --needed mingw-w64-x86_64-ntldd-git 2>/dev/null || pacman -S --noconfirm --needed ntldd 2>/dev/null || true'
+    # ntldd (from ntldd-git) is the authoritative tool for DLL dependency closure
+    # because it resolves PE import tables via the Windows loader, catching mingw64
+    # DLLs that MSYS2's built-in `ldd` misses entirely.  If ntldd is unavailable we
+    # FAIL LOUDLY — a silent fallback to ldd would produce an incomplete closure that
+    # breaks on clean VMs (plan risk #2).
+    Write-Step "Installing ntldd-git for dependency closure ..."
+    & $Msys2Bash --login -c 'pacman -S --noconfirm --needed mingw-w64-x86_64-ntldd-git'
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to install ntldd-git — cannot build a complete DLL closure without it."
+    }
 
     Write-Step "Computing DLL dependency closure ..."
-    # Shell script executed inside MSYS2 to build the file list.
+    # Shell script executed inside MSYS2 to build the staging area.
+    #
+    # KEY DESIGN DECISIONS (addressing plan risk #2):
+    #   1. ntldd is REQUIRED — if it is missing after the install above the script
+    #      aborts with a hard error (not a warning).
+    #   2. We use the RESOLVED ABSOLUTE PATH from ntldd output, not a basename lookup
+    #      restricted to /usr/bin.  xorriso and rsync may pull DLLs from /mingw64/bin
+    #      or elsewhere; we capture them all.
+    #   3. An MSYS2-tree dependency is identified by its resolved path containing
+    #      'msys64', 'mingw64', or '/usr/' — meaning it lives inside the MSYS2 tree.
+    #      Windows system DLLs (kernel32, ntdll, ucrtbase, etc.) are excluded because
+    #      their resolved paths contain 'Windows' or 'System32'.
+    #   4. Recursion walks the dependency graph depth-first via the resolved paths.
     $closureScript = @'
 #!/bin/bash
 set -euo pipefail
 
-MSYS2_USR_BIN="/usr/bin"
 STAGE="/tmp/runtime-stage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/usr/bin"
 
-# Target executables we must ship.
-TARGETS=("xorriso" "rsync" "bash")
-
-# Compute closure: for each binary, collect all MSYS-resident DLL deps.
-declare -A seen
-collect_deps() {
-    local bin="$1"
-    local full
-    if [[ "$bin" == *.exe ]]; then
-        full="$bin"
-    else
-        full="${MSYS2_USR_BIN}/${bin}.exe"
-        [[ -f "$full" ]] || full="${MSYS2_USR_BIN}/${bin}"
+# ── ntldd is mandatory — fail loudly if unavailable ──────────────────────────
+NTLDD=""
+# ntldd-git installs under /mingw64/bin when installed as mingw-w64-x86_64-ntldd-git
+for candidate in /mingw64/bin/ntldd /mingw64/bin/ntldd.exe /usr/bin/ntldd /usr/bin/ntldd.exe; do
+    if [[ -x "$candidate" ]]; then
+        NTLDD="$candidate"
+        break
     fi
-    [[ -f "$full" ]] || { echo "WARNING: $full not found, skipping" >&2; return; }
+done
+if [[ -z "$NTLDD" ]]; then
+    echo "FATAL: ntldd not found — cannot compute complete DLL closure." >&2
+    echo "       Install ntldd-git: pacman -S mingw-w64-x86_64-ntldd-git" >&2
+    exit 1
+fi
+echo "Using ntldd: $NTLDD"
 
-    # Use ldd (built-in MSYS2) to list deps.  ntldd gives more complete results.
-    local deps
-    if command -v ntldd &>/dev/null; then
-        # ntldd outputs "  NAME => PATH (0xADDR)"
-        deps=$(ntldd -R "$full" 2>/dev/null | awk '{print $3}' | grep -i 'msys64\|msys2' | tr '\\' '/' | sed 's|.*bin/||' || true)
-    else
-        deps=$(ldd "$full" 2>/dev/null | awk '{print $1}' | grep -v '^/' | tr '\\' '/' | sed 's|.*/||' || true)
-    fi
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
-    for dep in $deps; do
-        dep_name=$(basename "$dep")
-        [[ "${seen[$dep_name]+_}" ]] && continue
-        seen[$dep_name]=1
-        local dep_path="${MSYS2_USR_BIN}/${dep_name}"
-        if [[ -f "$dep_path" ]]; then
-            cp "$dep_path" "$STAGE/usr/bin/"
-            collect_deps "$dep_path"
-        fi
-    done
+# is_msys2_path: returns 0 (true) if the RESOLVED path lives inside the MSYS2
+# tree.  We match on the lowercased path containing 'msys64', 'mingw64', or
+# '/usr/'.  Windows system DLLs resolve to paths containing 'windows' or
+# 'system32' and are excluded.
+is_msys2_path() {
+    local lower
+    lower=$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr '\\' '/')
+    # Exclude obvious system paths
+    [[ "$lower" == *windows* ]] && return 1
+    [[ "$lower" == *system32* ]] && return 1
+    # Include anything that lives inside the MSYS2 installation
+    [[ "$lower" == *msys64* ]] && return 0
+    [[ "$lower" == *mingw64* ]] && return 0
+    [[ "$lower" == */usr/* ]] && return 0
+    return 1
 }
 
-# Copy the primary binaries first.
+# resolved_path: convert a Windows-style path from ntldd to a POSIX path the
+# shell can work with.  ntldd emits paths like C:\msys64\usr\bin\msys-2.0.dll
+# or /usr/bin/msys-2.0.dll depending on context.
+resolved_path() {
+    local p="$1"
+    # Already POSIX? leave as-is.
+    if [[ "$p" == /* ]]; then
+        echo "$p"
+        return
+    fi
+    # Windows absolute path: C:\... → /c/...  (cygpath handles this)
+    cygpath -u "$p" 2>/dev/null || echo "$p"
+}
+
+# ── Dependency closure ───────────────────────────────────────────────────────
+declare -A seen   # keyed on resolved POSIX path to avoid re-processing
+
+collect_deps() {
+    local binary="$1"
+    [[ -f "$binary" ]] || { echo "WARNING: $binary not found, skipping" >&2; return; }
+
+    # Run ntldd with -R (recursive) to get all transitive deps in one pass.
+    # Output format: "  libfoo.dll => C:\msys64\usr\bin\libfoo.dll (0x...)"
+    # We parse the resolved path (field 3).
+    while IFS= read -r line; do
+        # Extract the resolved path — third whitespace-separated token
+        local resolved_raw
+        resolved_raw=$(echo "$line" | awk '{print $3}')
+        [[ -z "$resolved_raw" || "$resolved_raw" == "not" ]] && continue
+
+        # Normalise to POSIX
+        local resolved
+        resolved=$(resolved_path "$resolved_raw")
+        [[ -f "$resolved" ]] || continue
+
+        # Skip if already staged
+        [[ "${seen[$resolved]+_}" ]] && continue
+        seen[$resolved]=1
+
+        # Only bundle DLLs that live inside the MSYS2 tree
+        is_msys2_path "$resolved" || continue
+
+        local dest="$STAGE/usr/bin/$(basename "$resolved")"
+        cp "$resolved" "$dest"
+        echo "  bundled: $(basename "$resolved")  ← $resolved"
+    done < <("$NTLDD" -R "$binary" 2>/dev/null || true)
+}
+
+# ── Stage primary binaries and walk their full closure ───────────────────────
+TARGETS=("xorriso" "rsync" "bash")
 for t in "${TARGETS[@]}"; do
-    src="${MSYS2_USR_BIN}/${t}.exe"
-    [[ -f "$src" ]] || src="${MSYS2_USR_BIN}/${t}"
-    if [[ -f "$src" ]]; then
-        cp "$src" "$STAGE/usr/bin/"
-        seen["$(basename $src)"]=1
-        collect_deps "$src"
-    else
+    # Search /usr/bin first, then /mingw64/bin (rsync can live there)
+    src=""
+    for candidate in "/usr/bin/${t}.exe" "/usr/bin/${t}" "/mingw64/bin/${t}.exe" "/mingw64/bin/${t}"; do
+        [[ -f "$candidate" ]] && { src="$candidate"; break; }
+    done
+    if [[ -z "$src" ]]; then
         echo "ERROR: target binary not found: $t" >&2
+        exit 1
+    fi
+    dest="$STAGE/usr/bin/$(basename "$src")"
+    cp "$src" "$dest"
+    seen[$src]=1
+    echo "Staged: $(basename "$src")  ← $src"
+    collect_deps "$src"
+done
+
+# Always include msys-2.0.dll — the POSIX emulation layer required by everything.
+MSY_PATH="/usr/bin/msys-2.0.dll"
+if [[ -f "$MSY_PATH" ]]; then
+    cp "$MSY_PATH" "$STAGE/usr/bin/"
+    seen[$MSY_PATH]=1
+    echo "Staged: msys-2.0.dll  (forced)"
+else
+    echo "ERROR: msys-2.0.dll not found at $MSY_PATH" >&2
+    exit 1
+fi
+
+# ── Sanity check before we exit ──────────────────────────────────────────────
+for required in xorriso.exe rsync.exe bash.exe msys-2.0.dll; do
+    if [[ ! -f "$STAGE/usr/bin/$required" ]]; then
+        echo "FATAL: required binary not staged: $required" >&2
         exit 1
     fi
 done
 
-# Always include msys-2.0.dll (the MSYS POSIX emulation layer) — required by all.
-MSY="msys-2.0.dll"
-if [[ -f "${MSYS2_USR_BIN}/${MSY}" ]]; then
-    cp "${MSYS2_USR_BIN}/${MSY}" "$STAGE/usr/bin/"
-fi
-
 # Summary
 echo "--- DLL closure ---"
 ls "$STAGE/usr/bin/" | sort
-echo "--- end closure ($(ls $STAGE/usr/bin/ | wc -l) files) ---"
-echo "$STAGE"
+echo "--- end closure ($(ls "$STAGE/usr/bin/" | wc -l) files) ---"
 '@
 
     $closureScriptPath = Join-Path $TempDir 'build-closure.sh'
@@ -283,16 +377,24 @@ echo "$STAGE"
         throw "Stage bin dir not found: $stageBin"
     }
 
-    Set-Content -Path $runtimeMarker -Value $runtimeMarkerExpected -Encoding UTF8
-    Write-Done "runtime/ populated"
-
-    # Validate that key binaries are present.
-    foreach ($bin in @('xorriso.exe', 'rsync.exe', 'bash.exe', 'msys-2.0.dll')) {
+    # FAIL LOUDLY: every core binary must be present after staging.
+    # A missing binary means the DLL closure was incomplete — the bundle would
+    # silently break on a clean VM (plan risk #2).  Use throw, not Write-Warning.
+    $missingBinaries = @()
+    foreach ($bin in $CoreBinaries) {
         $p = Join-Path $RuntimeDir "usr\bin\$bin"
         if (-not (Test-Path $p)) {
-            Write-Warning "Expected binary missing: $p — check the closure script output above."
+            $missingBinaries += $bin
         }
     }
+    if ($missingBinaries.Count -gt 0) {
+        throw "Core binaries missing from runtime/ after staging — build CANNOT proceed.`n" +
+              "Missing: $($missingBinaries -join ', ')`n" +
+              "Check the closure script output above for errors."
+    }
+
+    Set-Content -Path $runtimeMarker -Value $runtimeMarkerExpected -Encoding UTF8
+    Write-Done "runtime/ populated — all core binaries present: $($CoreBinaries -join ', ')"
 }
 
 # ── Step 3 : runtime/etc/fstab ───────────────────────────────────────────────
@@ -313,6 +415,21 @@ New-Item -ItemType Directory -Force -Path $etcDir | Out-Null
 # We pre-populate the common drive letters; MSYS2 itself will NOT auto-mount
 # drives that are not listed here, so the list is exhaustive for A-Z.
 # Add or remove entries if you only need specific drives.
+#
+# ⚠  SMOKE-TEST REQUIRED ON A CLEAN VM (plan §10, P3):
+#    MSYS2's default cygdrive prefix is /  (i.e. C: → /c), which differs from
+#    the WSL convention (/mnt/c) used by autodeploy.ps1.  This fstab overrides
+#    that default, but the override MUST be validated on a clean Windows VM
+#    (no prior MSYS2 installation, no WSL) before trusting path resolution:
+#
+#      bin\wsl.exe xorriso -version
+#      bin\wsl.exe xorriso -indev /mnt/c/<path-to-test-iso> -toc
+#
+#    If xorriso reports "cannot open source" for a /mnt/c/... path, the fstab
+#    remapping is not being applied — check that runtime/etc/fstab is read by
+#    the embedded bash (MSYS2_ROOT/etc/fstab symlink or MSYSCON env var may
+#    override it; inspect with: bin\wsl.exe bash -c 'mount | grep mnt').
+#    Do NOT ship a release without this verification on a clean VM.
 $fstabContent = @'
 # autodeploy-desktop — MSYS2 portable fstab
 # Mount Windows drives at /mnt/<drive> to mirror the WSL path convention.
