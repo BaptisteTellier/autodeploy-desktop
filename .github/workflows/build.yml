@@ -37,6 +37,7 @@ jobs:
 
       # Install MSYS2 — needed by fetch-runtime.ps1 for the MSYS2 subtree.
       - name: Install MSYS2
+        id: msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MSYS
@@ -89,7 +90,9 @@ jobs:
       - name: Build portable bundle
         shell: pwsh
         env:
-          MSYS2_ROOT: 'C:\msys64'
+          # Same instance setup-msys2 installed xorriso/rsync into (not the
+          # image's system C:\msys64, which lacks those packages).
+          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
         run: |
           .\scripts\build-bundle.ps1 `
             -Version      '${{ steps.ver.outputs.app_version }}' `
