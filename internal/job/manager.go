@@ -19,6 +19,12 @@ type Options struct {
 	DataDir       string // /data
 	AutodeployDir string // /opt/autodeploy
 	PSScript      string // autodeploy.ps1
+	// PSExe is the absolute path to the pwsh binary to invoke.
+	// Defaults to "pwsh" (system PATH) when empty.
+	PSExe string
+	// ExtraPath is prepended to PATH for every child process so bundled
+	// tools (xorriso, rsync, wsl shim) are found without a system install.
+	ExtraPath     string
 	MaxConcurrent int
 	KeepCompleted int
 }
@@ -144,6 +150,8 @@ func (m *Manager) runWorker(j *Job) {
 	r := Runner{
 		AutodeployDir:  m.opts.AutodeployDir,
 		PSScript:       m.opts.PSScript,
+		PSExe:          m.opts.PSExe,
+		ExtraPath:      m.opts.ExtraPath,
 		OverrideScript: filepath.Join(m.opts.DataDir, "autodeploy", "autodeploy.ps1"),
 		IsoDir:         filepath.Join(m.opts.DataDir, "iso"),
 		OutputDir:      filepath.Join(m.opts.DataDir, "output"),

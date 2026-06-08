@@ -74,14 +74,22 @@
         <input type="hidden" name="SourceISO" :value="isoSelected">
 
         <!-- Mode toggle -->
-        <div class="flex gap-2">
+        <div class="flex gap-2 flex-wrap">
           <button type="button" @click="isoMode='select'"
                   :class="isoMode==='select' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
                   class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors">{{t "wiz.iso_select"}}</button>
           <button type="button" @click="isoMode='upload'"
                   :class="isoMode==='upload' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
                   class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors">{{t "wiz.iso_upload"}}</button>
+          <button type="button" @click="browseISO()"
+                  :class="isoMode==='browse' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
+                  class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors">{{t "wiz.iso_browse"}}</button>
         </div>
+
+        <!-- Browse result — shown when an absolute path was picked -->
+        <div x-show="isoMode==='browse' && isoSelected" x-cloak
+             class="text-sm text-emerald-700 bg-emerald-50 rounded-lg px-3 py-2 font-mono break-all"
+             x-text="isoSelected"></div>
 
         <!-- Select existing — fully reactive, list refreshes after upload -->
         <div x-show="isoMode==='select'">

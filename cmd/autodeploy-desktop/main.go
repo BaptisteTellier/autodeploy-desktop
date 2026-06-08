@@ -1,16 +1,22 @@
+//go:build windows
+
 package main
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
-	"os/signal"
+	"os/exec"
 	"path/filepath"
 	"strconv"
-	"syscall"
+	"strings"
 	"time"
+
+	webview "github.com/jchv/go-webview2"
 
 	"github.com/BaptisteTellier/autodeploy-desktop/internal/config"
 	"github.com/BaptisteTellier/autodeploy-desktop/internal/job"
@@ -34,33 +40,66 @@ func shortCommit() string {
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	log.Printf("autodeploy-web %s (commit %s, built %s) starting", version, shortCommit(), date)
+	log.Printf("autodeploy-desktop %s (commit %s, built %s) starting", version, shortCommit(), date)
 
-	addr := envDefault("LISTEN_ADDR", ":8080")
-	dataDir := envDefault("DATA_DIR", "/data")
-	autodeployDir := envDefault("AUTODEPLOY_DIR", "/opt/autodeploy")
+	// --- 1. Exe-relative paths -----------------------------------------------
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Fatalf("resolve executable: %v", err)
+	}
+	exeDir := filepath.Dir(exePath)
+
+	// Allow env overrides so CI / advanced users can override any path.
+	dataDir := envDefault("DATA_DIR", filepath.Join(exeDir, "data"))
+	autodeployDir := envDefault("AUTODEPLOY_DIR", filepath.Join(exeDir, "autodeploy"))
+	psExe := envDefault("PWSH_EXE", filepath.Join(exeDir, "pwsh", "pwsh.exe"))
 	psScript := envDefault("PS_SCRIPT", "autodeploy.ps1")
 	concurrency := envInt("WORKER_CONCURRENCY", 1)
 
+	// --- 2. Augmented PATH ---------------------------------------------------
+	// Prefix bundled bin/ (wsl shim), runtime/usr/bin (xorriso/rsync/bash) and
+	// pwsh/ so every child process finds the right tools without needing any
+	// system installation.
+	augmentedPath := strings.Join([]string{
+		filepath.Join(exeDir, "bin"),
+		filepath.Join(exeDir, "runtime", "usr", "bin"),
+		filepath.Join(exeDir, "pwsh"),
+		os.Getenv("PATH"),
+	}, string(os.PathListSeparator))
+
+	// --- 3. Data layout + work dir -------------------------------------------
 	if err := config.EnsureDataLayout(dataDir); err != nil {
 		log.Fatalf("data layout: %v", err)
 	}
 
-	// Clear any stale per-job staging dirs left over from a crash, then
-	// recreate the empty work directory so it's ready for new jobs.
 	workDir := filepath.Join(dataDir, "work")
 	_ = os.RemoveAll(workDir)
 	_ = os.MkdirAll(workDir, 0o755)
 
-	store := config.NewStore(dataDir + "/configs")
+	// --- 4. Job manager + store ----------------------------------------------
+	store := config.NewStore(filepath.Join(dataDir, "configs"))
 
 	mgr := job.NewManager(job.Options{
 		DataDir:       dataDir,
 		AutodeployDir: autodeployDir,
 		PSScript:      psScript,
+		PSExe:         psExe,
+		ExtraPath:     augmentedPath,
 		MaxConcurrent: concurrency,
 		KeepCompleted: 50,
 	})
+
+	// --- 5. HTTP server on ephemeral port ------------------------------------
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		log.Fatalf("listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	log.Printf("listening on %s", baseURL)
+
+	// quit channel: closed by /quit handler or window close
+	quit := make(chan struct{})
 
 	srv := server.New(server.Deps{
 		Version:       version,
@@ -70,31 +109,82 @@ func main() {
 		AutodeployDir: autodeployDir,
 		Store:         store,
 		JobManager:    mgr,
+		QuitFunc:      func() { safeClose(quit) },
 	})
 
 	httpSrv := &http.Server{
-		Addr:              addr,
 		Handler:           srv.Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	go func() {
-		log.Printf("listening on %s", addr)
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("http: %v", err)
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
-	log.Println("shutting down")
+	// --- 6. WebView2 window (with browser fallback) --------------------------
+	wv := tryWebView2(baseURL+"/", quit)
+	if wv != nil {
+		// WebView2 available — run the event loop (blocks until window closes).
+		wv.Run()
+		wv.Destroy()
+	} else {
+		// Fallback: open default browser, then wait for /quit or OS signal.
+		log.Println("WebView2 runtime not available — opening default browser")
+		openBrowser(baseURL + "/")
+		<-quit
+	}
 
+	// --- 7. Graceful shutdown ------------------------------------------------
+	log.Println("shutting down")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(ctx)
 	mgr.Shutdown(ctx)
 	log.Println("bye")
+}
+
+// tryWebView2 attempts to create a WebView2 window. Returns nil if the runtime
+// is absent (panics from go-webview2 are recovered).
+func tryWebView2(url string, quit chan struct{}) (wv webview.WebView) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("WebView2 unavailable: %v", r)
+			wv = nil
+		}
+	}()
+	w := webview.NewWithOptions(webview.WebViewOptions{
+		Debug:  false,
+		Window: nil,
+	})
+	if w == nil {
+		return nil
+	}
+	w.SetTitle("autodeploy-desktop")
+	w.SetSize(1280, 800, webview.HintNone)
+	w.Navigate(url)
+
+	// Bind a JS function so the window's close button also triggers graceful quit.
+	_ = w.Bind("__desktopQuit", func() string {
+		safeClose(quit)
+		return ""
+	})
+	w.Init(`window.addEventListener('beforeunload', function(){ try{ __desktopQuit(); }catch(_){} });`)
+	return w
+}
+
+// openBrowser opens url in the default Windows browser.
+func openBrowser(url string) {
+	if err := exec.Command("cmd", "/c", "start", url).Start(); err != nil {
+		log.Printf("open browser: %v", err)
+	}
+}
+
+// safeClose closes ch exactly once (ignores double-close).
+func safeClose(ch chan struct{}) {
+	defer func() { recover() }() //nolint:errcheck
+	close(ch)
 }
 
 func envDefault(k, def string) string {

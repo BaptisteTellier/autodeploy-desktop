@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>autodeploy-web · {{.Version}}{{if .Commit}}+{{.Commit}}{{end}}</title>
+<title>autodeploy-desktop · {{.Version}}{{if .Commit}}+{{.Commit}}{{end}}</title>
 <link rel="stylesheet" href="/static/tailwind.css">
 <script src="/static/tailwind.js"></script>
 <script src="/static/htmx.min.js" defer></script>
@@ -13,7 +13,7 @@
 <body class="bg-slate-50 text-slate-800 min-h-screen">
 <header class="bg-emerald-700 text-white sticky top-0 z-50 shadow-md">
   <div class="container mx-auto px-4 py-3.5 flex items-center justify-between gap-4">
-    <a href="/" class="text-lg font-bold whitespace-nowrap">🚀 autodeploy-web</a>
+    <a href="/" class="text-lg font-bold whitespace-nowrap">🚀 autodeploy-desktop</a>
     <div class="flex items-center gap-5 flex-wrap justify-end">
       <nav class="flex items-center gap-1 text-sm flex-wrap">
         <a href="/wizard"
@@ -49,6 +49,12 @@
            class="flex items-center gap-1 px-2 py-1 rounded transition-colors hover:bg-emerald-600 opacity-75 hover:opacity-100">
           GitHub
         </a>
+        <button type="button"
+                onclick="if(confirm('Quit autodeploy-desktop?')) fetch('/quit',{method:'POST'})"
+                class="flex items-center gap-1 px-2 py-1 rounded transition-colors hover:bg-red-600 text-sm opacity-75 hover:opacity-100"
+                title="{{t "nav.quit"}}">
+          ✕ {{t "nav.quit"}}
+        </button>
       </nav>
 
       <!-- Language switcher (FR / EN flags) -->
