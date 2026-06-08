@@ -872,6 +872,41 @@ func listDir(dir string, exts []string) []string {
 	return out
 }
 
+// --- Desktop-only endpoints -----------------------------------------------
+
+// handlePickISO opens the native Windows file-open dialog (via sqweek/dialog)
+// and returns the selected absolute path as JSON.
+// Falls back gracefully on non-Windows or if the dialog is cancelled.
+func (s *Server) handlePickISO(w http.ResponseWriter, r *http.Request) {
+	path, err := pickISODialog()
+	if err != nil {
+		// User cancelled or dialog not available — return empty path, not an error.
+		writeJSON(w, map[string]string{"path": ""})
+		return
+	}
+	writeJSON(w, map[string]string{"path": path})
+}
+
+// handleOpenOutput launches explorer.exe on the job's output folder so the
+// user can view generated files in Windows Explorer.
+func (s *Server) handleOpenOutput(w http.ResponseWriter, r *http.Request) {
+	jobID := filepath.Base(r.PathValue("job"))
+	dir := filepath.Join(s.deps.DataDir, "output", jobID)
+	if err := openExplorer(dir); err != nil {
+		http.Error(w, "open: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleQuit triggers a graceful application shutdown via the registered QuitFunc.
+func (s *Server) handleQuit(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
+	if s.deps.QuitFunc != nil {
+		go s.deps.QuitFunc()
+	}
+}
+
 func presetListOrEmpty(s *config.Store) []config.PresetInfo {
 	items, _ := s.List()
 	if items == nil {

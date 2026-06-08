@@ -62,7 +62,8 @@ var translations = map[string]map[string]string{
 		"nav.licenses":  "Licenses",
 		"nav.jobs":      "Jobs",
 		"nav.settings":  "Settings",
-		"footer.pre":    "autodeploy-web — web wrapper around the ",
+		"nav.quit":      "Quit",
+		"footer.pre":    "autodeploy-desktop — ",
 		"footer.post":   " PowerShell tool.",
 
 		// --- common (shared across pages) ---
@@ -249,14 +250,10 @@ var translations = map[string]map[string]string{
 		"out.confirm_delete_one":  "Delete this folder?",
 
 		// --- media_output_job.html ---
-		"outjob.view_job":   "🔍 View job",
-		"outjob.folder_pre": "Folder",
-		"outjob.none":       "No files in this folder (job still running?).",
-		"outjob.show_link":  "🔗 Link",
-		"outjob.link_title": "Direct link",
-		"outjob.link_hint":  "Use this URL as a live kickstart in GRUB (inst.ks=…).",
-		"outjob.copy":       "Copy",
-		"outjob.copied":     "Copied!",
+		"outjob.view_job":    "🔍 View job",
+		"outjob.folder_pre":  "Folder",
+		"outjob.none":        "No files in this folder (job still running?).",
+		"outjob.open_folder": "📂 Open folder",
 
 		// --- media_license.html ---
 		"lic.title":            "🔑 License management",
@@ -283,6 +280,7 @@ var translations = map[string]map[string]string{
 		"wiz.save_error":                               "Save failed: ",
 		"wiz.iso_select":                               "Choose an existing ISO",
 		"wiz.iso_upload":                               "Upload a new ISO",
+		"wiz.iso_browse":                               "Browse…",
 		"wiz.iso_uploading":                            "Uploading…",
 		"wiz.iso_done":                                 "Upload complete ✓",
 		"wiz.iso_error":                                "Upload failed: ",
@@ -357,8 +355,9 @@ var translations = map[string]map[string]string{
 		"nav.licenses":  "Licences",
 		"nav.jobs":      "Jobs",
 		"nav.settings":  "Paramètres",
-		"footer.pre":    "autodeploy-web — interface web autour de l'outil PowerShell ",
-		"footer.post":   ".",
+		"nav.quit":      "Quitter",
+		"footer.pre":    "autodeploy-desktop — ",
+		"footer.post":   " outil PowerShell.",
 
 		// --- common ---
 		"common.delete":     "Supprimer",
@@ -544,14 +543,10 @@ var translations = map[string]map[string]string{
 		"out.confirm_delete_one":  "Supprimer ce dossier ?",
 
 		// --- media_output_job.html ---
-		"outjob.view_job":   "🔍 Voir le job",
-		"outjob.folder_pre": "Dossier",
-		"outjob.none":       "Aucun fichier dans ce dossier (job encore en cours ?).",
-		"outjob.show_link":  "🔗 Lien",
-		"outjob.link_title": "Lien direct",
-		"outjob.link_hint":  "Utilisez cette URL comme kickstart live dans GRUB (inst.ks=…).",
-		"outjob.copy":       "Copier",
-		"outjob.copied":     "Copié !",
+		"outjob.view_job":    "🔍 Voir le job",
+		"outjob.folder_pre":  "Dossier",
+		"outjob.none":        "Aucun fichier dans ce dossier (job encore en cours ?).",
+		"outjob.open_folder": "📂 Ouvrir le dossier",
 
 		// --- media_license.html ---
 		"lic.title":            "🔑 Gestion licences",
@@ -578,6 +573,7 @@ var translations = map[string]map[string]string{
 		"wiz.save_error":                               "Échec de la sauvegarde : ",
 		"wiz.iso_select":                               "Choisir un ISO existant",
 		"wiz.iso_upload":                               "Uploader un nouvel ISO",
+		"wiz.iso_browse":                               "Parcourir…",
 		"wiz.iso_uploading":                            "Upload en cours…",
 		"wiz.iso_done":                                 "Upload terminé ✓",
 		"wiz.iso_error":                                "Échec de l'upload : ",

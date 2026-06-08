@@ -18,6 +18,8 @@ type Deps struct {
 	AutodeployDir string
 	Store         *config.Store
 	JobManager    *job.Manager
+	// QuitFunc, when non-nil, is called by POST /quit to initiate graceful shutdown.
+	QuitFunc func()
 }
 
 type Server struct {
@@ -87,6 +89,11 @@ func (s *Server) Routes() http.Handler {
 	// Generic delete/rename for workspace + license
 	mux.HandleFunc("DELETE /media/{kind}/{name}", s.handleDeleteMediaFile)
 	mux.HandleFunc("POST /media/{kind}/{name}/rename", s.handleRenameMediaFile)
+
+	// Desktop-only endpoints
+	mux.HandleFunc("POST /pick/iso", s.handlePickISO)
+	mux.HandleFunc("POST /open/output/{job}", s.handleOpenOutput)
+	mux.HandleFunc("POST /quit", s.handleQuit)
 
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(s.static))))
 

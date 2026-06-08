@@ -17,13 +17,20 @@ import (
 type Runner struct {
 	AutodeployDir string // where the PS1 lives, e.g. /opt/autodeploy
 	PSScript      string // autodeploy.ps1
-	IsoDir        string // /data/iso — where source ISOs live
-	OutputDir     string // /data/output  (job subfolder created here)
-	LicenseDir    string // /data/license
-	ConfDir       string // /data/conf
-	JobID         string // per-job output subfolder: OutputDir/JobID/
-	SourceISO     string // bare filename of the source ISO (e.g. "veeam.iso")
-	WorkDir       string // base dir for per-job staging dirs, e.g. /data/work
+	// PSExe is the absolute path to the pwsh binary. Falls back to "pwsh" when empty.
+	PSExe string
+	// ExtraPath is prepended to PATH so bundled tools are found first.
+	ExtraPath  string
+	IsoDir     string // /data/iso — where source ISOs live
+	OutputDir  string // /data/output  (job subfolder created here)
+	LicenseDir string // /data/license
+	ConfDir    string // /data/conf
+	JobID      string // per-job output subfolder: OutputDir/JobID/
+	// SourceISO is either:
+	//   • a bare filename relative to IsoDir (legacy), OR
+	//   • an absolute path to the ISO on disk (P5: no copy, cwd = ISO dir).
+	SourceISO string
+	WorkDir   string // base dir for per-job staging dirs, e.g. /data/work
 
 	// OverrideScript, if non-empty and the file exists, is used instead of
 	// AutodeployDir/PSScript. Populated from /data/autodeploy/autodeploy.ps1
@@ -60,6 +67,17 @@ func (r *Runner) Run(ctx context.Context) (int, error) {
 		return -1, fmt.Errorf("config file missing: %w", err)
 	}
 
+	// --- Determine ISO source strategy (P5) -----------------------------------
+	// If SourceISO is an absolute path to an existing file we set cwd to its
+	// directory and pass only the basename — avoiding a 15-20 GB copy.
+	// Otherwise we fall back to the legacy IsoDir strategy.
+	isoAbsolute := false
+	if r.SourceISO != "" && filepath.IsAbs(r.SourceISO) {
+		if _, statErr := os.Stat(r.SourceISO); statErr == nil {
+			isoAbsolute = true
+		}
+	}
+
 	// Per-job staging directory under /data/work/<jobID> — same filesystem as
 	// /data/output so that moving large ISOs is an instant rename, not a copy.
 	stageDir := filepath.Join(r.WorkDir, r.JobID)
@@ -68,14 +86,23 @@ func (r *Runner) Run(ctx context.Context) (int, error) {
 	}
 	defer os.RemoveAll(stageDir)
 
-	// Symlink the source ISO into the staging dir so the PS1 finds it by bare name.
-	// Base the name so a crafted SourceISO can't point the symlink outside IsoDir.
-	if r.SourceISO != "" {
-		iso := filepath.Base(r.SourceISO)
-		src := filepath.Join(r.IsoDir, iso)
-		dst := filepath.Join(stageDir, iso)
-		if err := os.Symlink(src, dst); err != nil {
-			r.OnLine(fmt.Sprintf("[warn] symlink source ISO: %v", err))
+	// cwd for pwsh: ISO directory when using an absolute path, else stageDir.
+	runDir := stageDir
+	if isoAbsolute {
+		runDir = filepath.Dir(r.SourceISO)
+		r.OnLine(fmt.Sprintf("[info] absolute ISO source — cwd set to %s", runDir))
+	}
+
+	if !isoAbsolute {
+		// Symlink the source ISO into the staging dir so the PS1 finds it by bare name.
+		// Base the name so a crafted SourceISO can't point the symlink outside IsoDir.
+		if r.SourceISO != "" {
+			iso := filepath.Base(r.SourceISO)
+			src := filepath.Join(r.IsoDir, iso)
+			dst := filepath.Join(stageDir, iso)
+			if err := os.Symlink(src, dst); err != nil {
+				r.OnLine(fmt.Sprintf("[warn] symlink source ISO: %v", err))
+			}
 		}
 	}
 
@@ -108,15 +135,43 @@ func (r *Runner) Run(ctx context.Context) (int, error) {
 		filepath.Base(stagedConfig): true,
 	}
 
+	// Resolve pwsh binary — prefer bundled PSExe, fall back to system PATH.
+	psExe := r.PSExe
+	if psExe == "" {
+		psExe = "pwsh"
+	}
+
+	// When using absolute ISO, output is still collected from stageDir (the PS1
+	// writes outputs relative to its -ConfigFile; outputs land in stageDir via
+	// the staged config, then collectOutputs moves them to OutputDir/JobID).
 	args := []string{
 		"-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
 		"-File", stagedScript,
-		"-ConfigFile", filepath.Base(stagedConfig),
+		"-ConfigFile", stagedConfig,
 	}
 
-	cmd := exec.CommandContext(ctx, "pwsh", args...)
-	cmd.Dir = stageDir
-	cmd.Env = append(os.Environ(), "POWERSHELL_TELEMETRY_OPTOUT=1")
+	cmd := exec.CommandContext(ctx, psExe, args...)
+	cmd.Dir = runDir
+
+	// Build child environment: prepend augmented PATH and disable telemetry.
+	env := os.Environ()
+	if r.ExtraPath != "" {
+		// Replace existing PATH entry with the augmented one.
+		const pathKey = "PATH"
+		found := false
+		for i, e := range env {
+			if strings.HasPrefix(strings.ToUpper(e), pathKey+"=") {
+				env[i] = pathKey + "=" + r.ExtraPath
+				found = true
+				break
+			}
+		}
+		if !found {
+			env = append(env, pathKey+"="+r.ExtraPath)
+		}
+	}
+	env = append(env, "POWERSHELL_TELEMETRY_OPTOUT=1")
+	cmd.Env = env
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -127,8 +182,8 @@ func (r *Runner) Run(ctx context.Context) (int, error) {
 		return -1, err
 	}
 
-	r.OnLine(fmt.Sprintf("[%s] $ pwsh %s", time.Now().Format(time.RFC3339), strings.Join(args, " ")))
-	r.OnLine(fmt.Sprintf("[%s] cwd: %s", time.Now().Format(time.RFC3339), stageDir))
+	r.OnLine(fmt.Sprintf("[%s] $ %s %s", time.Now().Format(time.RFC3339), psExe, strings.Join(args, " ")))
+	r.OnLine(fmt.Sprintf("[%s] cwd: %s", time.Now().Format(time.RFC3339), runDir))
 
 	if err := cmd.Start(); err != nil {
 		return -1, err

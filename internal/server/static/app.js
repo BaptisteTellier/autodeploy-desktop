@@ -269,6 +269,25 @@ function wizardApp(initialIsos = [], msgs = {}) {
       }
     },
 
+    // --- ISO Browse (desktop: native file dialog via /pick/iso) -------------
+    async browseISO() {
+      this.isoMode = 'browse';
+      this.isoStatus = '';
+      this.isoError = '';
+      try {
+        const res = await fetch('/pick/iso', { method: 'POST' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (data.path) {
+          this.isoSelected = data.path;
+        }
+        // If data.path is empty the user cancelled — stay in browse mode.
+      } catch (e) {
+        this.isoStatus = 'error';
+        this.isoError = e.message;
+      }
+    },
+
     // --- ISO Upload ----------------------------------------------------------
     async uploadISO(file) {
       if (!file) return;
