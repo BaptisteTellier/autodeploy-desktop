@@ -343,8 +343,10 @@ echo "--- end closure ($(ls "$STAGE/usr/bin/" | wc -l) files) ---"
 '@
 
     $closureScriptPath = Join-Path $TempDir 'build-closure.sh'
-    # Write with LF line endings (MSYS2 bash requires Unix line endings)
-    [System.IO.File]::WriteAllText($closureScriptPath, $closureScript, [System.Text.Encoding]::UTF8)
+    # Write with LF line endings and NO BOM — a UTF-8 BOM corrupts the shebang
+    # line (bash reports "#!/bin/bash: No such file or directory").
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($closureScriptPath, $closureScript, $utf8NoBom)
 
     # Convert path to MSYS2 POSIX form.
     $msysScriptPath = $closureScriptPath -replace '^([A-Z]):\\', '/mnt/$1/' -replace '\\', '/'

@@ -85,6 +85,7 @@ jobs:
 
       # Install MSYS2 — required by fetch-runtime.ps1 to build the runtime/ subtree.
       - name: Install MSYS2
+        id: msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MSYS
@@ -94,8 +95,6 @@ jobs:
             rsync
             mingw-w64-x86_64-ntldd-git
 
-      # Point fetch-runtime.ps1 at the MSYS2 installation set up by the action.
-      # The msys2/setup-msys2 action installs to C:\msys64 by default.
       - name: Resolve autodeploy version
         id: adver
         shell: pwsh
@@ -107,7 +106,9 @@ jobs:
       - name: Build portable bundle
         shell: pwsh
         env:
-          MSYS2_ROOT: 'C:\msys64'
+          # Harvest from the SAME MSYS2 the action installed xorriso/rsync into
+          # (not the image's system C:\msys64, which lacks those packages).
+          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
         run: |
           $version = (git describe --tags --always --dirty 2>$null).Trim()
           if (-not $version) { $version = 'dev' }
