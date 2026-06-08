@@ -1,31 +1,125 @@
 name: ci
+
 on:
   push:
     branches: [main, master, dev]
   pull_request:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
+  # ── Go quality checks (gofmt, vet, test) ─────────────────────────────────
   test:
-    runs-on: ubuntu-latest
+    name: Go lint & test
+    # Windows runner — needed because some build tags or cgo stubs may be
+    # Windows-only; also validates that the Go toolchain works on the target OS.
+    runs-on: windows-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - name: Fetch vendored assets
-        run: sh scripts/fetch-vendor.sh
-      - name: go mod tidy
+          cache: true
+
+      - name: go mod tidy (verify no drift)
         run: go mod tidy
-      - name: go vet
-        run: go vet ./...
-      - name: go test
-        run: go test ./... -race -count=1
-      - name: gofmt
+
+      - name: gofmt (fail if any file is not gofmt-ed)
+        shell: pwsh
         run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "::error::Files not gofmt-ed:"
-            echo "$unformatted"
+          $unformatted = gofmt -l .
+          if ($unformatted) {
+            Write-Host "::error::Files not gofmt-ed:" -ForegroundColor Red
+            $unformatted | ForEach-Object { Write-Host "  $_" }
             gofmt -d .
             exit 1
-          fi
+          }
+          Write-Host "gofmt OK" -ForegroundColor Green
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -race -count=1
+
+  # ── i18n EN/FR parity check ───────────────────────────────────────────────
+  # Mirrors the rigour from autodeploy-web: every i18n key present in EN must
+  # also exist in FR (and vice-versa).  The check script lives in scripts/.
+  i18n:
+    name: i18n EN/FR parity
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check i18n key parity (EN vs FR)
+        run: python3 scripts/check-i18n.py
+
+  # ── Bundle assembly ───────────────────────────────────────────────────────
+  # Runs only on push to main/master and on tags — not on every PR, because
+  # fetch-runtime.ps1 requires MSYS2 and network access to download pwsh.
+  # The bundle is uploaded as a workflow artifact for smoke-testing.
+  bundle:
+    name: Build portable bundle
+    needs: [test]
+    runs-on: windows-latest
+    if: >
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' ||
+       github.ref == 'refs/heads/master' ||
+       startsWith(github.ref, 'refs/tags/'))
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Fetch tags so `git describe` can resolve the version string.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      # Install MSYS2 — required by fetch-runtime.ps1 to build the runtime/ subtree.
+      - name: Install MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: >-
+            xorriso
+            rsync
+            mingw-w64-x86_64-ntldd-git
+
+      # Point fetch-runtime.ps1 at the MSYS2 installation set up by the action.
+      # The msys2/setup-msys2 action installs to C:\msys64 by default.
+      - name: Resolve autodeploy version
+        id: adver
+        shell: pwsh
+        run: |
+          $ver = '${{ github.event.inputs.autodeploy_version }}'
+          if (-not $ver) { $ver = 'main' }
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+
+      - name: Build portable bundle
+        shell: pwsh
+        env:
+          MSYS2_ROOT: 'C:\msys64'
+        run: |
+          $version = (git describe --tags --always --dirty 2>$null).Trim()
+          if (-not $version) { $version = 'dev' }
+          Write-Host "Building version: $version"
+          .\scripts\build-bundle.ps1 `
+            -Version $version `
+            -AutodeployVersion '${{ steps.adver.outputs.version }}'
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: autodeploy-desktop-bundle
+          path: dist/*.zip
+          if-no-files-found: warn
+          retention-days: 14
