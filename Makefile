@@ -1,38 +1,37 @@
-.PHONY: build run image image-local push clean test fmt vet tidy vendor
+.PHONY: build bundle fetch-runtime test fmt vet tidy clean i18n
 
 VERSION            ?= dev
-AUTODEPLOY_VERSION ?= dev
-IMAGE              ?= ghcr.io/baptistetellier/autodeploy-web
-DATA_DIR           ?= $(PWD)/data
+AUTODEPLOY_VERSION ?= main
 
-vendor:
-	sh scripts/fetch-vendor.sh
+# ── Build (Go only, no runtime bundling) ─────────────────────────────────────
+# Compiles the desktop exe only — useful for quick iteration.
+# For a full portable zip (with pwsh + MSYS2 runtime), use `make bundle` instead.
+build:
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+	    go build \
+	    -ldflags="-s -w -X main.version=$(VERSION)" \
+	    -o autodeploy-desktop.exe \
+	    ./cmd/autodeploy-desktop
 
-build: vendor
-	CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$(VERSION)" -o bin/autodeploy-web ./cmd/autodeploy-web
+# ── Portable bundle (exe + pwsh + MSYS2 runtime + autodeploy.ps1) ─────────────
+# Requires PowerShell 7 on PATH and MSYS2 installed (for the runtime subtree).
+# Set MSYS2_ROOT if MSYS2 is not at C:\msys64.
+bundle:
+	pwsh -NoProfile -ExecutionPolicy Bypass \
+	    -File scripts/build-bundle.ps1 \
+	    -Version $(VERSION) \
+	    -AutodeployVersion $(AUTODEPLOY_VERSION)
 
-run: build
-	LISTEN_ADDR=:8080 DATA_DIR=$(DATA_DIR) AUTODEPLOY_DIR=/opt/autodeploy ./bin/autodeploy-web
+# ── Portable runtime only (pwsh + MSYS2 subtree) ─────────────────────────────
+fetch-runtime:
+	pwsh -NoProfile -ExecutionPolicy Bypass \
+	    -File scripts/fetch-runtime.ps1
 
-image:
-	docker buildx build \
-	    --platform linux/amd64,linux/arm64 \
-	    --build-arg VERSION=$(VERSION) \
-	    --build-arg AUTODEPLOY_VERSION=$(AUTODEPLOY_VERSION) \
-	    -t $(IMAGE):$(VERSION) \
-	    -t $(IMAGE):latest \
-	    .
-
-image-local: image
-	@echo "Local image built: $(IMAGE):$(VERSION)"
-
-push:
-	docker push $(IMAGE):$(VERSION)
-	docker push $(IMAGE):latest
-
+# ── Tests ─────────────────────────────────────────────────────────────────────
 test:
 	go test ./... -race -count=1
 
+# ── Code quality ──────────────────────────────────────────────────────────────
 fmt:
 	gofmt -s -w .
 
@@ -42,14 +41,10 @@ vet:
 tidy:
 	go mod tidy
 
+# ── i18n parity check (EN vs FR) ─────────────────────────────────────────────
+i18n:
+	python3 scripts/check-i18n.py
+
+# ── Clean ─────────────────────────────────────────────────────────────────────
 clean:
-	rm -rf bin dist
-
-dev-up:
-	docker compose up -d --build
-
-dev-down:
-	docker compose down
-
-dev-logs:
-	docker compose logs -f
+	rm -rf bin dist autodeploy-desktop.exe

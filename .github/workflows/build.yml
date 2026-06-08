@@ -1,78 +1,146 @@
-name: build-image
+name: build-release
+
 on:
   push:
-    branches: [main, master]
     tags: ['v*']
   workflow_dispatch:
     inputs:
       autodeploy_version:
         description: 'Tag/branch of BaptisteTellier/autodeploy to bake in'
         required: false
-        default: 'dev'
+        default: 'main'
+      version_override:
+        description: 'Override version string (leave blank to use git tag)'
+        required: false
+        default: ''
 
 permissions:
-  contents: read
-  packages: write
+  contents: write   # needed to create the GitHub Release and upload assets
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  release:
+    name: Build & release portable bundle
+    runs-on: windows-latest
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Resolve autodeploy version
-        id: ad
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      # Install MSYS2 — needed by fetch-runtime.ps1 for the MSYS2 subtree.
+      - name: Install MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: >-
+            xorriso
+            rsync
+            mingw-w64-x86_64-ntldd-git
+
+      - name: Resolve versions
+        id: ver
+        shell: pwsh
         run: |
-          ver="${{ github.event.inputs.autodeploy_version }}"
-          if [ -z "$ver" ]; then
-            ver=$(grep -E '^ARG AUTODEPLOY_VERSION=' Dockerfile | head -1 | cut -d= -f2)
-          fi
-          [ -z "$ver" ] && ver="main"
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          # Application version
+          $override = '${{ github.event.inputs.version_override }}'
+          if ($override) {
+            $appVer = $override
+          } else {
+            $appVer = (git describe --tags --always --dirty 2>$null).Trim()
+            if (-not $appVer) { $appVer = 'dev' }
+          }
 
-      - name: Build metadata
-        id: bmeta
-        run: echo "date=$(date -u +%Y-%m-%dT%H:%MZ)" >> "$GITHUB_OUTPUT"
+          # autodeploy.ps1 version
+          $adVer = '${{ github.event.inputs.autodeploy_version }}'
+          if (-not $adVer) { $adVer = 'main' }
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+          echo "app_version=$appVer"    >> $env:GITHUB_OUTPUT
+          echo "ad_version=$adVer"      >> $env:GITHUB_OUTPUT
+          Write-Host "App version   : $appVer"
+          Write-Host "autodeploy PS1: $adVer"
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
+      # Run gofmt, vet, and tests before building — fail fast on quality issues.
+      - name: gofmt
+        shell: pwsh
+        run: |
+          $unformatted = gofmt -l .
+          if ($unformatted) {
+            Write-Host "::error::Files not gofmt-ed:" -ForegroundColor Red
+            $unformatted | ForEach-Object { Write-Host "  $_" }
+            gofmt -d .
+            exit 1
+          }
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -race -count=1
+
+      - name: Build portable bundle
+        shell: pwsh
+        env:
+          MSYS2_ROOT: 'C:\msys64'
+        run: |
+          .\scripts\build-bundle.ps1 `
+            -Version      '${{ steps.ver.outputs.app_version }}' `
+            -AutodeployVersion '${{ steps.ver.outputs.ad_version }}'
+
+      # Compute SHA-256 of the zip for the release notes.
+      - name: Compute zip checksum
+        id: checksum
+        shell: pwsh
+        run: |
+          $zip = Get-Item dist\*.zip | Select-Object -First 1
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip.FullName).Hash
+          echo "sha256=$hash"          >> $env:GITHUB_OUTPUT
+          echo "zip_name=$($zip.Name)" >> $env:GITHUB_OUTPUT
+          Write-Host "SHA-256: $hash"
+
+      # Create a GitHub Release and attach the zip.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          name: autodeploy-desktop ${{ steps.ver.outputs.app_version }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body: |
+            ## autodeploy-desktop ${{ steps.ver.outputs.app_version }}
 
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/baptistetellier/autodeploy-web
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
+            Portable Windows desktop application — no installation required.
 
-      - name: Build & push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ github.ref_name }}
-            COMMIT=${{ github.sha }}
-            BUILD_DATE=${{ steps.bmeta.outputs.date }}
-            AUTODEPLOY_VERSION=${{ steps.ad.outputs.version }}
-          no-cache-filters: fetch
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ### Contents
+            - PowerShell 7.4.x portable (win-x64)
+            - MSYS2 portable runtime: xorriso + rsync + bash + transitive DLLs
+            - `autodeploy.ps1` baked-in @ `${{ steps.ver.outputs.ad_version }}`
+
+            ### Quick start
+            1. Extract the zip to any folder.
+            2. Double-click `autodeploy-desktop.exe`.
+            3. If prompted by SmartScreen, click **More info** then **Run anyway**.
+               (The binary is not code-signed — see plan risk #8.)
+            4. Follow the wizard: browse to your Veeam source ISO, configure,
+               click **Generate ISO**.
+
+            ### SHA-256
+            ```
+            ${{ steps.checksum.outputs.sha256 }}  ${{ steps.checksum.outputs.zip_name }}
+            ```
+
+            ### WebView2 note
+            The app uses the WebView2 runtime (bundled with Windows 11 and most
+            Windows 10 installations). If WebView2 is absent, the app falls back to
+            opening your default browser on the local wizard URL.
+          files: dist/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
