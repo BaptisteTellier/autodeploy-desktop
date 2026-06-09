@@ -139,16 +139,21 @@ func main() {
 	}()
 
 	// --- 6. WebView2 window (with browser fallback) --------------------------
+	// Always open the guided wizard on launch (a desktop app starts fresh each
+	// time); the in-app nav still lets the user switch to the expert "New job"
+	// form. Landing on /wizard directly also sidesteps any stale ui_mode cookie.
+	landingURL := baseURL + "/wizard"
+
 	// First do an explicit registry probe so we never attempt to load WebView2
 	// when the Evergreen runtime is simply absent (avoids hard crashes in Run).
 	if !webView2RuntimePresent() {
 		log.Println("WebView2 Evergreen runtime not found — opening default browser")
-		openBrowser(baseURL + "/")
+		openBrowser(landingURL)
 		<-quit
-	} else if !tryWebView2(baseURL+"/", quit) {
+	} else if !tryWebView2(landingURL, quit) {
 		// Runtime present but window creation / Run() failed unexpectedly.
 		log.Println("WebView2 window failed — falling back to default browser")
-		openBrowser(baseURL + "/")
+		openBrowser(landingURL)
 		<-quit
 	}
 
