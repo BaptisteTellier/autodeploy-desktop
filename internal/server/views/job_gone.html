@@ -1,0 +1,20 @@
+{{define "content"}}
+<div class="max-w-xl mx-auto mt-10 text-center">
+  <div class="text-5xl mb-4">🕓</div>
+  <h1 class="text-xl font-semibold text-slate-800 mb-2">{{t "job.gone.title"}}</h1>
+  <p class="text-slate-600 mb-2">{{t "job.gone.body"}}</p>
+  <p class="text-xs text-slate-400 font-mono mb-6">{{.JobID}}</p>
+  <div class="flex items-center justify-center gap-3">
+    {{if .HasOutput}}
+    <a href="/media/output/{{.JobID}}"
+       class="px-4 py-2 rounded bg-emerald-700 text-white text-sm hover:bg-emerald-600">
+      📦 {{t "job.gone.view_output"}}
+    </a>
+    {{end}}
+    <a href="/jobs"
+       class="px-4 py-2 rounded border border-slate-300 text-slate-700 text-sm hover:bg-slate-100">
+      {{t "job.gone.back"}}
+    </a>
+  </div>
+</div>
+{{end}}

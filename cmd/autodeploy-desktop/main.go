@@ -18,8 +18,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 
 	webview "github.com/jchv/go-webview2"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 
 	"github.com/BaptisteTellier/autodeploy-desktop/internal/config"
@@ -213,6 +215,7 @@ func tryWebView2(url string, quit chan struct{}) (ok bool) {
 
 	w.SetTitle("autodeploy-desktop")
 	w.SetSize(1280, 800, webview.HintNone)
+	setWindowIcon(uintptr(w.Window())) // taskbar + title-bar icon from the exe
 	w.Navigate(url)
 
 	// Bind a JS function so the window's close button also triggers graceful quit.
@@ -232,6 +235,43 @@ func tryWebView2(url string, quit chan struct{}) (ok bool) {
 func openBrowser(url string) {
 	if err := exec.Command("cmd", "/c", "start", url).Start(); err != nil {
 		log.Printf("open browser: %v", err)
+	}
+}
+
+// setWindowIcon applies the exe's embedded icon to the WebView2 window so the
+// taskbar and title bar show it (go-webview2 does not do this automatically).
+// Best-effort: any failure is silently ignored.
+func setWindowIcon(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	exePtr, err := windows.UTF16PtrFromString(exe)
+	if err != nil {
+		return
+	}
+	shell32 := windows.NewLazySystemDLL("shell32.dll")
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	extractIconEx := shell32.NewProc("ExtractIconExW")
+	sendMessage := user32.NewProc("SendMessageW")
+
+	var hLarge, hSmall windows.Handle
+	// ExtractIconExW(path, 0, &large, &small, 1) — pull the first embedded icon.
+	extractIconEx.Call(
+		uintptr(unsafe.Pointer(exePtr)), 0,
+		uintptr(unsafe.Pointer(&hLarge)), uintptr(unsafe.Pointer(&hSmall)), 1,
+	)
+	const wmSetIcon = 0x0080
+	const iconSmall = 0
+	const iconBig = 1
+	if hSmall != 0 {
+		sendMessage.Call(hwnd, wmSetIcon, iconSmall, uintptr(hSmall))
+	}
+	if hLarge != 0 {
+		sendMessage.Call(hwnd, wmSetIcon, iconBig, uintptr(hLarge))
 	}
 }
 

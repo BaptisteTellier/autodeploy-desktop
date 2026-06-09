@@ -122,7 +122,14 @@ func (s *Server) handleJobDetail(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	j, ok := s.deps.JobManager.Get(id)
 	if !ok {
-		http.NotFound(w, r)
+		// Job history is in-memory only and does not survive a restart, but the
+		// generated files persist on disk. Render a friendly page (with a link to
+		// the output folder when it still exists) instead of a raw 404.
+		_, statErr := os.Stat(filepath.Join(s.deps.DataDir, "output", filepath.Base(id)))
+		s.render(w, r, "views/job_gone.html", map[string]any{
+			"JobID":     id,
+			"HasOutput": statErr == nil,
+		})
 		return
 	}
 	s.render(w, r, "views/job.html", map[string]any{

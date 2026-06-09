@@ -56,15 +56,19 @@ func translate(lang, key string) string {
 var translations = map[string]map[string]string{
 	"en": {
 		// --- nav / layout ---
-		"nav.new_job":   "New job",
-		"nav.workspace": "Workspace",
-		"nav.output":    "Output",
-		"nav.licenses":  "Licenses",
-		"nav.jobs":      "Jobs",
-		"nav.settings":  "Settings",
-		"nav.quit":      "Quit",
-		"footer.pre":    "autodeploy-desktop — ",
-		"footer.post":   " PowerShell tool.",
+		"nav.new_job":          "New job",
+		"nav.workspace":        "Workspace",
+		"nav.output":           "Output",
+		"nav.licenses":         "Licenses",
+		"nav.jobs":             "Jobs",
+		"nav.settings":         "Settings",
+		"nav.quit":             "Quit",
+		"footer.pre":           "autodeploy-desktop — ",
+		"footer.post":          " PowerShell tool.",
+		"job.gone.title":       "This job is no longer available",
+		"job.gone.body":        "The job history is kept in memory only and is cleared when autodeploy-desktop restarts. Any files it generated are still on disk.",
+		"job.gone.view_output": "View output files",
+		"job.gone.back":        "Back to jobs",
 
 		// --- common (shared across pages) ---
 		"common.delete":     "Delete",
@@ -349,15 +353,19 @@ var translations = map[string]map[string]string{
 
 	"fr": {
 		// --- nav / layout ---
-		"nav.new_job":   "Nouveau job",
-		"nav.workspace": "Workspace",
-		"nav.output":    "Output",
-		"nav.licenses":  "Licences",
-		"nav.jobs":      "Jobs",
-		"nav.settings":  "Paramètres",
-		"nav.quit":      "Quitter",
-		"footer.pre":    "autodeploy-desktop — ",
-		"footer.post":   " outil PowerShell.",
+		"nav.new_job":          "Nouveau job",
+		"nav.workspace":        "Workspace",
+		"nav.output":           "Output",
+		"nav.licenses":         "Licences",
+		"nav.jobs":             "Jobs",
+		"nav.settings":         "Paramètres",
+		"nav.quit":             "Quitter",
+		"footer.pre":           "autodeploy-desktop — ",
+		"footer.post":          " outil PowerShell.",
+		"job.gone.title":       "Ce job n'est plus disponible",
+		"job.gone.body":        "L'historique des jobs est conservé en mémoire uniquement et est effacé au redémarrage d'autodeploy-desktop. Les fichiers générés restent présents sur le disque.",
+		"job.gone.view_output": "Voir les fichiers de sortie",
+		"job.gone.back":        "Retour aux jobs",
 
 		// --- common ---
 		"common.delete":     "Supprimer",
