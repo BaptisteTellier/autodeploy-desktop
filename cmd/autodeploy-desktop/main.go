@@ -76,6 +76,15 @@ func main() {
 		log.Fatalf("data layout: %v", err)
 	}
 
+	// Redirect logs to a file under data/ so the GUI build (-H windowsgui, no
+	// console) does not lose them. Earlier lines went to stderr (discarded when
+	// detached from a console — harmless).
+	if lf, lerr := os.OpenFile(filepath.Join(dataDir, "autodeploy-desktop.log"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); lerr == nil {
+		log.SetOutput(lf)
+		log.Printf("---- autodeploy-desktop %s starting (pid %d) ----", version, os.Getpid())
+	}
+
 	workDir := filepath.Join(dataDir, "work")
 	_ = os.RemoveAll(workDir)
 	_ = os.MkdirAll(workDir, 0o755)

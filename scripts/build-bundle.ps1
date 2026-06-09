@@ -95,7 +95,8 @@ if (-not (Test-Path $CmdDesktop)) {
     Write-Warning "incomplete; rerun after other workstreams add cmd\autodeploy-desktop."
 } else {
     Write-Step "go build cmd/autodeploy-desktop ..."
-    $ldflags = "-s -w -X main.version=$Version"
+    # -H windowsgui: GUI subsystem -> no console window (logs go to data/autodeploy-desktop.log).
+    $ldflags = "-s -w -H windowsgui -X main.version=$Version"
     $env:GOOS   = 'windows'
     $env:GOARCH = 'amd64'
     & go build -ldflags $ldflags -o (Join-Path $RepoRoot 'autodeploy-desktop.exe') "$CmdDesktop"
@@ -115,6 +116,11 @@ if (-not (Test-Path $CmdWslShim)) {
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     $env:GOOS   = 'windows'
     $env:GOARCH = 'amd64'
+    # NOTE: the shim MUST stay a console-subsystem app. pwsh does not capture the
+    # stdout of a GUI-subsystem child, which would break `& wsl echo` / `wsl which`
+    # in the PS1 prerequisite check. Console flashes are suppressed instead by the
+    # runner spawning pwsh with CREATE_NO_WINDOW (children inherit its windowless
+    # console). See internal/job/proc_windows.go.
     & go build -ldflags "-s -w" -o (Join-Path $BinDir 'wsl.exe') "$CmdWslShim"
     if ($LASTEXITCODE -ne 0) { throw "go build cmd/wslshim failed" }
     Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue

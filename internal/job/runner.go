@@ -133,6 +133,10 @@ func (r *Runner) Run(ctx context.Context) (int, error) {
 
 	cmd := exec.CommandContext(ctx, psExe, args...)
 	cmd.Dir = stageDir
+	// Spawn pwsh without a console window (Windows). Children it launches — the
+	// wsl shim, xorriso, rsync — inherit this windowless console, so nothing
+	// flashes on screen while stdout/stderr remain piped to us.
+	setNoWindow(cmd)
 
 	// Build child environment: prepend augmented PATH and disable telemetry.
 	env := os.Environ()
