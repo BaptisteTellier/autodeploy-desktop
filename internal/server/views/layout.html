@@ -50,7 +50,7 @@
           GitHub
         </a>
         <button type="button"
-                onclick="if(confirm('Quit autodeploy-desktop?')) fetch('/quit',{method:'POST'})"
+                onclick="fetch('/quit',{method:'POST'})"
                 class="flex items-center gap-1 px-2 py-1 rounded transition-colors hover:bg-red-600 text-sm opacity-75 hover:opacity-100"
                 title="{{t "nav.quit"}}">
           ✕ {{t "nav.quit"}}

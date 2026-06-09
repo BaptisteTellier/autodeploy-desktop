@@ -36,6 +36,10 @@ var (
 	date    = ""
 )
 
+// mainWindow holds the active WebView2 window (nil in browser-fallback mode) so
+// the /quit handler can terminate the event loop from another goroutine.
+var mainWindow webview.WebView
+
 // shortCommit returns the first 7 chars of the build commit SHA (or "").
 func shortCommit() string {
 	if len(commit) >= 7 {
@@ -124,7 +128,16 @@ func main() {
 		AutodeployDir: autodeployDir,
 		Store:         store,
 		JobManager:    mgr,
-		QuitFunc:      func() { safeClose(quit) },
+		QuitFunc: func() {
+			// In WebView2 mode the main goroutine is blocked in wv.Run(); closing
+			// the quit channel is not enough, we must Terminate the event loop on
+			// the UI thread. In browser-fallback mode mainWindow is nil and the
+			// channel close unblocks <-quit.
+			if mainWindow != nil {
+				mainWindow.Dispatch(func() { mainWindow.Terminate() })
+			}
+			safeClose(quit)
+		},
 	})
 
 	httpSrv := &http.Server{
@@ -216,6 +229,8 @@ func tryWebView2(url string, quit chan struct{}) (ok bool) {
 		log.Println("WebView2 NewWithOptions returned nil")
 		return false
 	}
+	mainWindow = w
+	defer func() { mainWindow = nil }()
 	defer w.Destroy()
 
 	w.SetTitle("autodeploy-desktop")

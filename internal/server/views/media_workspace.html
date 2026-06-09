@@ -32,6 +32,18 @@
          }
          if(failures) alert({{tjs "js.deletions_failed"}}.replace('{n}', failures));
          location.reload();
+       },
+       up:{busy:false, pct:0, err:''},
+       uploadFile(file){
+         if(!file) return;
+         this.up={busy:true, pct:0, err:''};
+         const xhr=new XMLHttpRequest();
+         xhr.open('POST','/media/workspace/upload');
+         xhr.upload.addEventListener('progress', e=>{ if(e.lengthComputable) this.up.pct=Math.round(e.loaded/e.total*100); });
+         xhr.addEventListener('load', ()=>{ if(xhr.status>=200 && xhr.status<400){ location.reload(); } else { this.up.busy=false; this.up.err='HTTP '+xhr.status; } });
+         xhr.addEventListener('error', ()=>{ this.up.busy=false; this.up.err='network error'; });
+         const fd=new FormData(); fd.append('file', file);
+         xhr.send(fd);
        }
      }">
 
@@ -44,17 +56,28 @@
               class="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded font-medium text-sm">
         🗑️ {{t "common.delete"}} <span x-text="count"></span> {{t "common.selected"}}
       </button>
-      <form method="POST" action="/media/workspace/upload" enctype="multipart/form-data">
-        <label class="flex items-center gap-2 cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded font-medium text-sm select-none">
-          {{t "ws.upload_iso"}}
-          <input type="file" name="file" accept=".iso" class="hidden"
-                 onchange="document.getElementById('ws-status').textContent={{tjs "ws.uploading"}}; this.form.submit();">
-        </label>
-      </form>
+      <label class="flex items-center gap-2 cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded font-medium text-sm select-none"
+             :class="up.busy ? 'opacity-60 pointer-events-none' : ''">
+        {{t "ws.upload_iso"}}
+        <input type="file" accept=".iso" class="hidden"
+               @change="uploadFile($event.target.files[0])">
+      </label>
     </div>
   </div>
-  <p class="text-sm text-slate-500" id="ws-status">
-    {{t "ws.folder_hint_pre"}} <code>/data/iso</code> {{t "ws.folder_hint_post"}}
+
+  <!-- Upload progress -->
+  <div x-show="up.busy" x-cloak class="max-w-md space-y-1">
+    <div class="flex justify-between text-xs text-slate-500">
+      <span>{{t "ws.uploading"}}</span><span x-text="up.pct+'%'"></span>
+    </div>
+    <div class="w-full bg-slate-200 rounded-full h-2">
+      <div class="bg-emerald-500 h-2 rounded-full transition-all duration-300" :style="'width:'+up.pct+'%'"></div>
+    </div>
+  </div>
+  <p x-show="up.err" x-cloak class="text-sm text-red-600" x-text="up.err"></p>
+
+  <p class="text-sm text-slate-500">
+    {{t "ws.folder_hint_pre"}} <code>data\iso</code> {{t "ws.folder_hint_post"}}
   </p>
 
   <!-- File list -->

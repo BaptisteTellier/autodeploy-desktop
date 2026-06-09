@@ -354,8 +354,8 @@ var translations = map[string]map[string]string{
 	"fr": {
 		// --- nav / layout ---
 		"nav.new_job":          "Nouveau job",
-		"nav.workspace":        "Workspace",
-		"nav.output":           "Output",
+		"nav.workspace":        "Espace de travail",
+		"nav.output":           "Sorties",
 		"nav.licenses":         "Licences",
 		"nav.jobs":             "Jobs",
 		"nav.settings":         "Paramètres",
@@ -530,7 +530,7 @@ var translations = map[string]map[string]string{
 		"admin.js_ps1_imported":      "autodeploy.ps1 importé.",
 
 		// --- media_workspace.html ---
-		"ws.title":            "🗂️ Workspace",
+		"ws.title":            "🗂️ Espace de travail",
 		"ws.upload_iso":       "⬆️ Uploader une ISO source",
 		"ws.uploading":        "⏳ Upload en cours…",
 		"ws.folder_hint_pre":  "Dossier",
@@ -540,7 +540,7 @@ var translations = map[string]map[string]string{
 		"ws.confirm_delete_n": "Supprimer {n} fichier(s) ?",
 
 		// --- media_output.html ---
-		"out.title":               "📦 Output",
+		"out.title":               "📦 Sorties",
 		"out.subtitle_pre":        "Un dossier par job — ISO générée, configs kickstart, logs. Racine :",
 		"out.none_pre":            "Aucun output pour l'instant. Lancez un job depuis",
 		"out.none_link":           "la page principale",
