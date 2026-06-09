@@ -51,13 +51,25 @@
         {{range $.ApplianceTypes}}<option value="{{.}}" {{if eq . $.Config.ApplianceType}}selected{{end}}>{{.}}</option>{{end}}
       </select>
     </label>
-    <label class="block">
+    <label class="block" x-data="{
+            iso: {{jsonStr .Config.SourceISO}},
+            known: [{{range .SourceISOs}}{{jsonStr .}},{{end}}],
+            async browse(){ try { const r = await fetch('/pick/iso',{method:'POST'}); const d = await r.json(); if (d.path) { this.iso = d.path; } } catch(e){} }
+          }">
       <span class="text-sm font-medium">{{t "form.source_iso"}}</span>
-      <select name="SourceISO" class="mt-1 w-full border rounded px-2 py-1">
-        <option value="">{{t "form.select_iso"}}</option>
-        {{range .SourceISOs}}<option value="{{.}}" {{if eq . $.Config.SourceISO}}selected{{end}}>{{.}}</option>{{end}}
-      </select>
-      <small class="text-slate-500">{{t "form.files_in"}} <code>/data/iso</code></small>
+      <!-- Single source of truth — carries either a data\iso filename or an absolute browsed path -->
+      <input type="hidden" name="SourceISO" :value="iso">
+      <div class="flex gap-2 mt-1">
+        <select class="flex-1 border rounded px-2 py-1" x-model="iso">
+          <option value="">{{t "form.select_iso"}}</option>
+          <!-- Keep an absolute browsed path selectable even though it isn't in data\iso -->
+          <template x-if="iso && !known.includes(iso)"><option :value="iso" x-text="iso"></option></template>
+          <template x-for="f in known" :key="f"><option :value="f" x-text="f"></option></template>
+        </select>
+        <button type="button" @click="browse()" class="bg-slate-200 rounded px-3 py-1 text-sm whitespace-nowrap">{{t "wiz.iso_browse"}}</button>
+      </div>
+      <small class="text-emerald-700 font-mono break-all" x-show="iso && !known.includes(iso)" x-cloak><span x-text="iso"></span></small>
+      <small class="text-slate-500" x-show="!(iso && !known.includes(iso))">{{t "form.files_in"}} <code>data\iso</code></small>
     </label>
     <label class="block">
       <span class="text-sm font-medium">{{t "form.output_iso"}}</span>
