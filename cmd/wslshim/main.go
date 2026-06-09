@@ -90,6 +90,20 @@ func run(args []string) int {
 	}
 
 	cmdName := cmdArgs[0]
+
+	// autodeploy.ps1's Test-Prerequisites probes WSL with two coreutils that are
+	// NOT part of the minimal MSYS2 runtime (which only ships xorriso/rsync/bash):
+	//   wsl echo "test"   -> must print "test"
+	//   wsl which xorriso -> must print a non-empty path
+	// Emulate them in-process so the prerequisite check passes without bloating
+	// the bundled runtime. Real tools (xorriso, rsync) fall through to exec below.
+	switch cmdName {
+	case "echo":
+		return emulateEcho(cmdArgs[1:])
+	case "which":
+		return emulateWhich(runtimeBin, cmdArgs[1:])
+	}
+
 	cmdExe := filepath.Join(runtimeBin, cmdName+".exe")
 
 	// Build child command.
@@ -232,4 +246,41 @@ func buildMsys2Env(runtimeBin string) []string {
 		"MSYS=winsymlinks:nativestrict",
 	)
 	return result
+}
+
+// emulateEcho reproduces `echo` for the prerequisite probe `wsl echo "test"`.
+// It honours a leading -n (suppress trailing newline), like POSIX echo.
+func emulateEcho(args []string) int {
+	newline := true
+	if len(args) > 0 && args[0] == "-n" {
+		newline = false
+		args = args[1:]
+	}
+	out := strings.Join(args, " ")
+	if newline {
+		fmt.Println(out)
+	} else {
+		fmt.Print(out)
+	}
+	return 0
+}
+
+// emulateWhich reproduces `which` for the probe `wsl which xorriso`. It resolves
+// the first positional argument against the bundled runtime bin dir and prints a
+// POSIX-style path when found (autodeploy.ps1 only checks the result is
+// non-empty). Returns 1 (no output) when the tool is absent.
+func emulateWhich(runtimeBin string, args []string) int {
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			continue // skip flags such as -a
+		}
+		for _, cand := range []string{a + ".exe", a} {
+			if _, err := os.Stat(filepath.Join(runtimeBin, cand)); err == nil {
+				fmt.Println("/usr/bin/" + a)
+				return 0
+			}
+		}
+		return 1 // first positional not found in the runtime
+	}
+	return 1
 }
